@@ -27,6 +27,23 @@ This document chronicles my development journey from the minimal starter templat
 
 ### Initial Analysis
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant EntryPoint
+    participant Kernel
+    
+    User->>EntryPoint: sendUserOp
+    EntryPoint->>Kernel: validateUserOp
+    Kernel->>Kernel: _validateSignature
+    Kernel->>Kernel: ecrecover(sig) == owner?
+    alt Valid Owner
+        Kernel-->>EntryPoint: 0 (Success)
+    else Invalid
+        Kernel-->>EntryPoint: 1 (Failure)
+    end
+```
+
 **My First Thoughts:**
 > "I have Kernel.sol with basic owner validation. It works, but it's limited. Users can only have one owner, one validation method. What if they want multi-sig? Session keys? Social recovery?"
 
@@ -176,6 +193,21 @@ function decodeNonce(uint256 nonce) internal pure returns (
 > 3. No extra calldata overhead
 > 4. Maintain ERC-4337 compatibility!"
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Kernel
+    participant Validator
+    
+    User->>Kernel: validateUserOp(nonce = [Mode|Type|ValidatorID|...])
+    Kernel->>Kernel: decodeNonce(nonce)
+    Note over Kernel: Extracts ValidatorID
+    
+    Kernel->>Validator: validateUserOp
+    Validator-->>Kernel: result
+    Kernel-->>User: validationData
+```
+
 ---
 
 ## Phase 2: Creating Module Architecture
@@ -265,6 +297,30 @@ function _validationStorage() internal pure returns (ValidationStorage storage s
 > 3. Predictable storage layout
 > 4. ERC-1967 compliant"
 
+```mermaid
+classDiagram
+    Kernel --|> ValidationManager
+    ValidationManager --|> SelectorManager
+    SelectorManager --|> HookManager
+    HookManager --|> ExecutorManager
+    
+    class Kernel {
+        +validateUserOp()
+        +execute()
+    }
+    class ValidationManager {
+        +installValidator()
+    }
+    class ExecutorManager {
+        +installExecutor()
+    }
+    class Storage {
+        <<Isolated Slots>>
+    }
+    ValidationManager ..> Storage : Uses specific slot
+    ExecutorManager ..> Storage : Uses specific slot
+```
+
 ---
 
 ## Phase 3: Advanced Nonce Management
@@ -327,6 +383,16 @@ function _validateUserOp(...) internal returns (uint256) {
 > 1. Invalidate all validators at once (emergency)
 > 2. Invalidate specific validators (targeted)
 > 3. Protect against replay of old signatures"
+
+```mermaid
+flowchart TD
+    A[Start Validation] --> B{Is Root Validator?}
+    B -- Yes --> C[Proceed]
+    B -- No --> D{Validator Nonce < validNonceFrom?}
+    D -- Yes --> E[Revert: InvalidNonce]
+    D -- No --> C
+    C --> F[Call Validator]
+```
 
 ---
 
@@ -414,6 +480,25 @@ function _validatePermission(...) internal returns (uint256) {
 > - Rate limiting
 > - Custom business logic
 > All composable!"
+
+```mermaid
+sequenceDiagram
+    participant Kernel
+    participant Policy1
+    participant Policy2
+    participant Signer
+    
+    Kernel->>Policy1: checkUserOpPolicy
+    Policy1-->>Kernel: Success
+    
+    Kernel->>Policy2: checkUserOpPolicy
+    Policy2-->>Kernel: Success
+    
+    Kernel->>Signer: checkUserOpSignature
+    Signer-->>Kernel: Signature Valid
+    
+    Note over Kernel: All checks passed -> Valid
+```
 
 ---
 
@@ -520,6 +605,24 @@ function executeBatch(
 Savings:             ~70,000 gas (47%)
 ```
 
+```mermaid
+graph TD
+    subgraph Single[Single Execution]
+        U1[UserOp 1] --> V1[Validate] --> E1[Execute] --> P1[Pay Base Gas]
+        U2[UserOp 2] --> V2[Validate] --> E2[Execute] --> P2[Pay Base Gas]
+    end
+    
+    subgraph Batch[Batch Execution]
+        U3[Batch UserOp] --> V3[Validate Once]
+        V3 --> Loop
+        subgraph Loop
+            E3[Execute 1]
+            E4[Execute 2]
+        end
+        Loop --> P3[Pay Base Gas Once]
+    end
+```
+
 ---
 
 ## Phase 6: Production Features
@@ -553,6 +656,25 @@ function validateUserOp(...) external returns (uint256) {
 
 **My Thinking:**
 > "User creates Merkle tree of all userOpHashes, signs the root once, then provides proof per chain. Brilliant!"
+
+```mermaid
+flowchart LR
+    subgraph Offchain
+        H1[Hash Chain A]
+        H2[Hash Chain B] 
+        H3[Hash Chain C]
+        H1 & H2 & H3 --> Root[Merkle Root]
+        Root -- Sign --> Sig[Signature]
+    end
+    
+    subgraph OnChainA [Chain A Kernel]
+        V[MultiChain Validator]
+        UserOp --> V
+        Proof --> V
+        Sig --> V
+        V --> Valid{Merkle Verify?}
+    end
+```
 
 ### Step 6.2: Weighted Multi-Sig
 

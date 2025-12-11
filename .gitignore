@@ -6,3 +6,5 @@ lib/
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md
+# *.md
+!README.md
